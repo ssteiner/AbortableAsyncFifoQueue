@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.30104.148
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "AsyncFifoQueueMemoryLeak", "AsyncFifoQueueMemoryLeak\AsyncFifoQueueMemoryLeak.csproj", "{ABF46EDD-5235-4ABE-BF28-95A998355BD6}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Debug|x86 = Debug|x86
+		Release|Any CPU = Release|Any CPU
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{ABF46EDD-5235-4ABE-BF28-95A998355BD6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{ABF46EDD-5235-4ABE-BF28-95A998355BD6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{ABF46EDD-5235-4ABE-BF28-95A998355BD6}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{ABF46EDD-5235-4ABE-BF28-95A998355BD6}.Debug|x86.Build.0 = Debug|Any CPU
+		{ABF46EDD-5235-4ABE-BF28-95A998355BD6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{ABF46EDD-5235-4ABE-BF28-95A998355BD6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{ABF46EDD-5235-4ABE-BF28-95A998355BD6}.Release|x86.ActiveCfg = Release|Any CPU
+		{ABF46EDD-5235-4ABE-BF28-95A998355BD6}.Release|x86.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {5BC8FE9D-019E-4EEC-93CA-6B354196FB7F}
+	EndGlobalSection
+EndGlobal
