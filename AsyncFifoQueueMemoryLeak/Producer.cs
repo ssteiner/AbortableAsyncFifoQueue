@@ -11,7 +11,7 @@ namespace AsyncFifoQueueMemoryLeak
     /// <summary>
     /// class that generates the data for the tests and then triggers the tests
     /// </summary>
-    internal class Tester
+    internal class Producer
     {
         //variables defining the test
         readonly int nbOfusers = 100;
@@ -24,12 +24,12 @@ namespace AsyncFifoQueueMemoryLeak
         private List<User> users;
         private List<Team> teams;
         //private readonly LeakyTestperformer tester;
-        private readonly BasicLeakyTestPerformer tester2;
+        private readonly LeakyConsumer tester2;
 
         protected CancellationTokenSource serverShutDownSource, testAbortSource;
         private CancellationToken internalToken = CancellationToken.None;
 
-        internal Tester()
+        internal Producer()
         {
             rand = new Random();
             testAbortSource = new CancellationTokenSource();
@@ -39,7 +39,7 @@ namespace AsyncFifoQueueMemoryLeak
             //{
             //    DisableTeams = true
             //};
-            tester2 = new BasicLeakyTestPerformer(users, serverShutDownSource, operationDuration);
+            tester2 = new LeakyConsumer(users, serverShutDownSource, operationDuration);
         }
 
         internal void StartTests()

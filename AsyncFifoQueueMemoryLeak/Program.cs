@@ -6,7 +6,7 @@ namespace AsyncFifoQueueMemoryLeak
     {
         static void Main(string[] args)
         {
-            var tester = new Tester();
+            var tester = new Producer();
             Console.WriteLine("Test successfully started, type exit to stop");
             string str;
             do

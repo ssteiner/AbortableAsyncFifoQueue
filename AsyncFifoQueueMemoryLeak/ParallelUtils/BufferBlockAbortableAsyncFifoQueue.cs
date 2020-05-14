@@ -1,28 +1,30 @@
-﻿using Nito.AsyncEx;
-using System;
+﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Threading.Tasks.Dataflow;
 
 namespace ParallelUtils
-{
-    public class ExecutableAsyncFifoQueue3<T> : IExecutableAsyncFifoQueue<T>
+{    
+
+    public class BufferBlockAbortableAsyncFifoQueue<T> : IExecutableAsyncFifoQueue<T>
     {
-        private AsyncCollection<AsyncWorkItem<T>> taskQueue;
-        private readonly Action<string, int> logAction;
+
+        private BufferBlock<AsyncWorkItem<T>> buffer;
         private readonly CancellationToken stopProcessingToken;
 
-        public ExecutableAsyncFifoQueue3(CancellationToken cancelToken, Action<string, int> logAction = null)
+        public BufferBlockAbortableAsyncFifoQueue(CancellationToken cancelToken)
         {
-            taskQueue = new AsyncCollection<AsyncWorkItem<T>>();
+            buffer = new BufferBlock<AsyncWorkItem<T>>();
             stopProcessingToken = cancelToken;
             stopProcessingToken.Register(stopProcessing);
-            this.logAction = logAction;
             _ = processQueuedItems();
         }
 
+        #region disposing
+
         private void stopProcessing()
         {
-            taskQueue.CompleteAdding();
+            buffer.Complete();
         }
 
         public void Dispose()
@@ -35,13 +37,15 @@ namespace ParallelUtils
         {
             if (disposing)
             {
-                if (taskQueue != null)
+                if (buffer != null)
                 {
-                    taskQueue.CompleteAdding();
-                    taskQueue = null;
+                    buffer.Complete();
+                    buffer = null;
                 }
             }
         }
+
+        #endregion
 
         public virtual Task<T> EnqueueTask(Func<Task<T>> action)
         {
@@ -51,19 +55,19 @@ namespace ParallelUtils
         public virtual Task<T> EnqueueTask(Func<Task<T>> action, CancellationToken? cancelToken)
         {
             var tcs = new TaskCompletionSource<T>();
-            Log($"Adding new task", 5);
-            var item = new AsyncWorkItem<T>(tcs, action, cancelToken);
-            taskQueue.Add(item);
+            log($"Adding new task, nb items in buffer: {buffer.Count}", 5);
+            buffer.Post(new AsyncWorkItem<T>(tcs, action, cancelToken));
             return tcs.Task;
         }
 
         protected virtual async Task processQueuedItems()
         {
+            AsyncWorkItem<T> item;
             while (!stopProcessingToken.IsCancellationRequested)
             {
                 try
                 {
-                    var item = await taskQueue.TakeAsync(stopProcessingToken).ConfigureAwait(false);
+                    item = await buffer.ReceiveAsync(stopProcessingToken).ConfigureAwait(false);
                     if (item.CancelToken.HasValue && item.CancelToken.Value.IsCancellationRequested)
                     {
                         item.TaskSource.SetCanceled();
@@ -88,16 +92,21 @@ namespace ParallelUtils
                         }
                     }
                 }
+                catch (TaskCanceledException) // wait task for receive was aborted.. 
+                {
+
+                }
                 catch (Exception e)
                 {
-                    Log($"exception processing a task: {e.Message} at {e.StackTrace}", 2);
+                    log($"exception processing a task: {e.Message} at {e.StackTrace}", 2);
                 }
             }
         }
 
-        protected void Log(string logMessage, int severity)
+        private void log(string message, int severity)
         {
-            logAction?.Invoke(logMessage, severity);
+            //Console.WriteLine($"{DateTime.Now:HH:mm:ss} {message}");
         }
+
     }
 }

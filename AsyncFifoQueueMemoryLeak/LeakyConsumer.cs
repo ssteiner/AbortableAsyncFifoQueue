@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 
 namespace AsyncFifoQueueMemoryLeak
 {
-    internal class BasicLeakyTestPerformer
+    internal class LeakyConsumer
     {
 
         private readonly ConcurrentDictionary<string, UserState> userPresenceStates;
@@ -20,7 +20,7 @@ namespace AsyncFifoQueueMemoryLeak
         protected CancellationTokenSource serverShutDownSource;
         private readonly int operationDuration = 1000;
 
-        internal BasicLeakyTestPerformer(List<User> users, CancellationTokenSource serverShutDownSource, int operationDuration)
+        internal LeakyConsumer(List<User> users, CancellationTokenSource serverShutDownSource, int operationDuration)
         {
             userPresenceStates = new ConcurrentDictionary<string, UserState>();
             userStateChangeAborters = new ConcurrentDictionary<string, CancellationTokenSource>();
@@ -52,7 +52,7 @@ namespace AsyncFifoQueueMemoryLeak
                     Log($"State of {user.UserId} has changed from {previousState} to {newState}", 4);
                 else if (!previousStateAvailable)
                     Log($"Processing state of {user.UserId} because no previous state was available, state: {newState}", 4);
-                await processUserStatus(user, newState, previousState).ConfigureAwait(false);
+                await processUseStateUpdateAsync(user, newState, previousState).ConfigureAwait(false);
             }
             else
             {
@@ -60,21 +60,9 @@ namespace AsyncFifoQueueMemoryLeak
             }
         }
 
-        internal async Task processUserStatus(User user, UserState state, UserState previousState, bool isInitialState = false)
+        internal async Task<bool> processUseStateUpdateAsync(User user, UserState state, UserState previousState)
         {
-            try
-            {
-                await processUseStateUpdateAsync(user, state, previousState, isInitialState).ConfigureAwait(false);
-            }
-            catch (Exception e)
-            {
-                Log($"Something went wrong in {nameof(processUserStatus)}: {e.Message}", 2);
-            }
-        }
-
-        internal async Task<bool> processUseStateUpdateAsync(User user, UserState state, UserState previousState, bool isInitialState = false)
-        {
-            var executor = getAsyncFifoExecutor(user.UserId);
+            var executor = groupStateChangeExecutors.GetOrAdd(user.UserId, new AsyncCollectionAbortableFifoQueue<bool>(serverShutDownSource.Token));
             CancellationTokenSource oldSource = null;
             using (var cancelSource = userStateChangeAborters.AddOrUpdate(user.UserId, new CancellationTokenSource(), (key, existingValue) =>
             {
@@ -161,18 +149,6 @@ namespace AsyncFifoQueueMemoryLeak
                 }
                 catch (ObjectDisposedException) { }
             }
-        }
-
-        private IExecutableAsyncFifoQueue<bool> getAsyncFifoExecutor(string presenceIdentifier)
-        {
-            return groupStateChangeExecutors.GetOrAdd(presenceIdentifier, getNewExecutor());
-        }
-
-        private IExecutableAsyncFifoQueue<bool> getNewExecutor()
-        {
-            //return new ExecutableAsyncFifoQueue<bool>();
-            return new ExecutableAsyncFifoQueue3<bool>(serverShutDownSource.Token);
-            //return new ModernExecutableAsyncFifoQueue<bool>(serverShutDownSource.Token);
         }
 
         internal void Log(string message, int severity)
