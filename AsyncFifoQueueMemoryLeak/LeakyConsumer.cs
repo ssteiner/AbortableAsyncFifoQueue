@@ -60,9 +60,18 @@ namespace AsyncFifoQueueMemoryLeak
             }
         }
 
+        private IExecutableAsyncFifoQueue<bool> getQueue()
+        {
+            return new ChannelAbortableBoundedFifoQueue<bool>(serverShutDownSource.Token);
+            // using AsyncCollection
+            //return new AsyncCollectionAbortableFifoQueue<bool>(serverShutDownSource.Token);
+            // using BufferBlock
+            // return new BufferBlockAbortableAsyncFifoQueue<bool>(serverShutDownSource.Token);
+        }
+
         internal async Task<bool> processUseStateUpdateAsync(User user, UserState state, UserState previousState)
         {
-            var executor = groupStateChangeExecutors.GetOrAdd(user.UserId, new AsyncCollectionAbortableFifoQueue<bool>(serverShutDownSource.Token));
+            var executor = groupStateChangeExecutors.GetOrAdd(user.UserId, getQueue());
             CancellationTokenSource oldSource = null;
             using (var cancelSource = userStateChangeAborters.AddOrUpdate(user.UserId, new CancellationTokenSource(), (key, existingValue) =>
             {
@@ -72,7 +81,7 @@ namespace AsyncFifoQueueMemoryLeak
             {
                 if (oldSource != null)
                 {
-                    Log($"Cancelling execution of {nameof(processUserStateUpdateAsync)} for user {user.UserId} because there's a new state: {state}", 4);
+                    Log($"Cancelling execution of {nameof(processUseStateUpdateAsync)} for user {user.UserId} because there's a new state: {state}", 4);
                     cancelAndDispose(oldSource);
                     oldSource = null;
                 }
@@ -87,17 +96,19 @@ namespace AsyncFifoQueueMemoryLeak
                     userStateChangeAborters.TryRemove(user.UserId, out var aborter);
                     return result;
                 }
-                catch (TaskCanceledException)
-                {
-                    Log($"Processing of presence state update for user {user.UserId} was aborted because another state came in", 4);
-                    return true;
-                    //all good here.. we aborted execution on purpose
-                }
                 catch (Exception e)
                 {
-                    Log($"Something went wrong in {nameof(processUserStateUpdateAsync)}: {e.Message}", 2);
-                    userStateChangeAborters.TryRemove(user.UserId, out var aborter);
-                    return false;
+                    if (e is TaskCanceledException || e is OperationCanceledException)
+                    {
+                        Log($"Processing of presence state update for user {user.UserId} was aborted because another state came in", 4);
+                        return true;
+                    }
+                    else
+                    {
+                        Log($"Something went wrong in {nameof(processUseStateUpdateAsync)}: {e.Message}", 2);
+                        userStateChangeAborters.TryRemove(user.UserId, out var aborter);
+                        return false;
+                    }
                 }
             }
         }
@@ -116,7 +127,10 @@ namespace AsyncFifoQueueMemoryLeak
                     Log($"User {user.UserId} is changing from {previousState} to {state}, skipping update", 4);
             }
             if (token.IsCancellationRequested)
+            {
+                Log($"User state processing aborted at position 1", 4);
                 return false;
+            }
             await Task.Delay(operationDuration, token).ConfigureAwait(false);
             Log($"Successfully processed state change of {user.UserId} from {previousState} to {state}", 4);
             return true;
