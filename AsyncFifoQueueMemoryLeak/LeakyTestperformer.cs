@@ -18,6 +18,7 @@ namespace AsyncFifoQueueMemoryLeak
 
         private readonly ConcurrentDictionary<string, UserState> userPresenceStates;
         private readonly ConcurrentDictionary<string, UserState> groupPresenceStates;
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> userLocks;
         private ConcurrentDictionary<string, IExecutableAsyncFifoQueue<bool>> groupStateChangeExecutors;
         private readonly ConcurrentDictionary<string, CancellationTokenSource> userStateChangeAborters;
         protected ConcurrentDictionary<string, CancellationTokenSource> groupStateChangeAborters;
@@ -39,6 +40,8 @@ namespace AsyncFifoQueueMemoryLeak
             userStateChangeAborters = new ConcurrentDictionary<string, CancellationTokenSource>();
             groupStateChangeAborters = new ConcurrentDictionary<string, CancellationTokenSource>();
             groupStateChangeExecutors = new ConcurrentDictionary<string, IExecutableAsyncFifoQueue<bool>>();
+            userLocks = new ConcurrentDictionary<string, SemaphoreSlim>();
+            users.ForEach(u => userLocks.TryAdd(u.UserId, new SemaphoreSlim(1)));
 
             this.serverShutDownSource = serverShutDownSource;
             this.teams = teams;
@@ -136,7 +139,7 @@ namespace AsyncFifoQueueMemoryLeak
                 Log($"Enqueuing presence state update for team {team.Name}, reason: {reason}", 5);
                 try
                 {
-                    var executionTask = executor.EnqueueTask(() => UpdateTeamPresence(team, reason, cancelSource.Token, force));
+                    var executionTask = executor.EnqueueTask(() => UpdateTeamPresence(team, reason, cancelSource.Token, force), cancelSource.Token);
                     var result = await executionTask.ConfigureAwait(false);
                     groupStateChangeAborters.TryRemove(team.UserId, out var aborter);
                     return result;
@@ -175,7 +178,7 @@ namespace AsyncFifoQueueMemoryLeak
                 try
                 {
                     var executionTask = executor.EnqueueTask(() => processUserPresenceUpdateAsync(user, state, previousState,
-                        cancelSource.Token, isInitialState));
+                        cancelSource.Token, isInitialState), cancelSource.Token);
                     if (cancelSource.Token.IsCancellationRequested)
                         return false;
                     var result = await executionTask.ConfigureAwait(false);
@@ -295,8 +298,8 @@ namespace AsyncFifoQueueMemoryLeak
 
         private IExecutableAsyncFifoQueue<bool> getNewExecutor()
         {
-            //return new ExecutableAsyncFifoQueue<bool>();
-            return new ExecutableAsyncFifoQueue3<bool>(serverShutDownSource.Token);
+            return new AsyncCollectionAbortableFifoQueue<bool>(serverShutDownSource.Token);
+            //return new ExecutableAsyncFifoQueue3<bool>(serverShutDownSource.Token);
             //return new ModernExecutableAsyncFifoQueue<bool>(serverShutDownSource.Token);
         }
 

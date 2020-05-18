@@ -1,5 +1,4 @@
-﻿using AsyncFifoQueueMemoryLeak.Models;
-using ParallelUtils;
+﻿using ParallelUtils;
 using System;
 using System.Collections.Concurrent;
 using System.Threading;
@@ -9,8 +8,8 @@ namespace AsyncFifoQueueMemoryLeak
 {
     internal class SimpleLeakyConsumer
     {
-        private ConcurrentDictionary<string, IExecutableAsyncFifoQueue<bool>> groupStateChangeExecutors = new ConcurrentDictionary<string, IExecutableAsyncFifoQueue<bool>>();
-        private readonly ConcurrentDictionary<string, CancellationTokenSource> userStateChangeAborters = new ConcurrentDictionary<string, CancellationTokenSource>();
+        private ConcurrentDictionary<string, Lazy<IExecutableAsyncFifoQueue<bool>>> groupStateChangeExecutors = new ConcurrentDictionary<string, Lazy<IExecutableAsyncFifoQueue<bool>>>();
+        private readonly ConcurrentDictionary<string, Lazy<CancellationTokenSource>> userStateChangeAborters = new ConcurrentDictionary<string, Lazy<CancellationTokenSource>>();
         protected CancellationTokenSource serverShutDownSource;
         private readonly int operationDuration = 1000;
 
@@ -20,37 +19,48 @@ namespace AsyncFifoQueueMemoryLeak
             this.operationDuration = operationDuration * 1000; // convert from seconds to milliseconds
         }
 
-        internal async Task<bool> ProcessStateChange(UserState state, User user)
+        private Lazy<IExecutableAsyncFifoQueue<bool>> getLazyQueue()
         {
-            var executor = groupStateChangeExecutors.GetOrAdd(user.UserId, new AsyncCollectionAbortableFifoQueue<bool>(serverShutDownSource.Token));
-            CancellationTokenSource oldSource = null;
-            using (var cancelSource = userStateChangeAborters.AddOrUpdate(user.UserId, new CancellationTokenSource(), (key, existingValue) =>
+            return new Lazy<IExecutableAsyncFifoQueue<bool>>(new AsyncCollectionAbortableFifoQueue<bool>(serverShutDownSource.Token));
+        }
+
+        private Lazy<CancellationTokenSource> tokenFactory()
+        {
+            return new Lazy<CancellationTokenSource>(new CancellationTokenSource());
+        }
+
+        internal async Task<bool> ProcessStateChange(string userId)
+        {
+            var executor = groupStateChangeExecutors.GetOrAdd(userId, _ => getLazyQueue()).Value;
+            CancellationTokenSource oldSource = null, cancelSource = null;
+            cancelSource = userStateChangeAborters.AddOrUpdate(userId, _ => tokenFactory(), (key, existingValue) =>
             {
-                oldSource = existingValue;
-                return new CancellationTokenSource();
-            }))
+                oldSource = existingValue.Value;
+                return tokenFactory();
+            }).Value;
+            if (oldSource != null && !oldSource.IsCancellationRequested)
             {
-                if (oldSource != null && !oldSource.IsCancellationRequested)
+                oldSource.Cancel();
+                _ = delayedDispose(oldSource);
+            }
+            try
+            {
+                var token = cancelSource.Token;
+                var executionTask = executor.EnqueueTask(async () => { await Task.Delay(operationDuration, token).ConfigureAwait(false); return true; }, token);
+                var result = await executionTask.ConfigureAwait(false);
+                if (userStateChangeAborters.TryRemove(userId, out var aborter))
+                    _ = delayedDispose(aborter.Value);
+                return result;
+            }
+            catch (Exception e)
+            {
+                if (e is TaskCanceledException || e is OperationCanceledException)
+                    return true;
+                else
                 {
-                    oldSource.Cancel();
-                    _ = delayedDispose(oldSource);
-                }
-                try
-                {
-                    var executionTask = executor.EnqueueTask(async () => { await Task.Delay(operationDuration, cancelSource.Token).ConfigureAwait(false); return true; }, cancelSource.Token);
-                    var result = await executionTask.ConfigureAwait(false);
-                    userStateChangeAborters.TryRemove(user.UserId, out var aborter);
-                    return result;
-                }
-                catch (Exception e)
-                {
-                    if (e is TaskCanceledException || e is OperationCanceledException)
-                        return true;
-                    else
-                    {
-                        userStateChangeAborters.TryRemove(user.UserId, out var aborter);
-                        return false;
-                    }
+                    if (userStateChangeAborters.TryRemove(userId, out var aborter))
+                        _ = delayedDispose(aborter.Value);
+                    return false;
                 }
             }
         }

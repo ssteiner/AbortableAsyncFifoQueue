@@ -13,8 +13,11 @@ namespace AsyncFifoQueueMemoryLeak
     {
 
         private readonly ConcurrentDictionary<string, UserState> userPresenceStates;
-        private ConcurrentDictionary<string, IExecutableAsyncFifoQueue<bool>> groupStateChangeExecutors;
-        private readonly ConcurrentDictionary<string, CancellationTokenSource> userStateChangeAborters;
+        private ConcurrentDictionary<string, Lazy<IExecutableAsyncFifoQueue<bool>>> groupStateChangeExecutors;
+        //private ConcurrentDictionary<string, IExecutableAsyncFifoQueue<bool>> groupStateChangeExecutors;
+        private readonly ConcurrentDictionary<string, Lazy<CancellationTokenSource>> userStateChangeAborters;
+        //private readonly ConcurrentDictionary<string, CancellationTokenSource> userStateChangeAborters;
+        private readonly ConcurrentDictionary<string, Lazy<SemaphoreSlim>> userLocks;
 
         private readonly List<User> users;
         protected CancellationTokenSource serverShutDownSource;
@@ -23,8 +26,11 @@ namespace AsyncFifoQueueMemoryLeak
         internal LeakyConsumer(List<User> users, CancellationTokenSource serverShutDownSource, int operationDuration)
         {
             userPresenceStates = new ConcurrentDictionary<string, UserState>();
-            userStateChangeAborters = new ConcurrentDictionary<string, CancellationTokenSource>();
-            groupStateChangeExecutors = new ConcurrentDictionary<string, IExecutableAsyncFifoQueue<bool>>();
+            userStateChangeAborters = new ConcurrentDictionary<string, Lazy<CancellationTokenSource>>();
+            groupStateChangeExecutors = new ConcurrentDictionary<string, Lazy<IExecutableAsyncFifoQueue<bool>>>();
+            //groupStateChangeExecutors = new ConcurrentDictionary<string, IExecutableAsyncFifoQueue<bool>>();
+            userLocks = new ConcurrentDictionary<string, Lazy<SemaphoreSlim>>();
+            users.ForEach(u => userLocks.TryAdd(u.UserId, new Lazy<SemaphoreSlim>(new SemaphoreSlim(1))));
 
             this.serverShutDownSource = serverShutDownSource;
             this.users = users;
@@ -60,56 +66,82 @@ namespace AsyncFifoQueueMemoryLeak
             }
         }
 
-        private IExecutableAsyncFifoQueue<bool> getQueue(string userId)
+        private Lazy<IExecutableAsyncFifoQueue<bool>> getLazyQueue(string userId)
         {
             Log($"Generating a new Fifo Queue for {userId}", 4);
-            //return new ChannelAbortableBoundedFifoQueue<bool>(serverShutDownSource.Token);
+            //return Lazy<IExecutableAsyncFifoQueue<bool>>(new ChannelAbortableBoundedFifoQueue<bool>(serverShutDownSource.Token));
             // using AsyncCollection
-            return new AsyncCollectionAbortableFifoQueue<bool>(serverShutDownSource.Token);
+            return new Lazy<IExecutableAsyncFifoQueue<bool>>(new AsyncCollectionAbortableFifoQueue<bool>(serverShutDownSource.Token));
             // using BufferBlock
-            // return new BufferBlockAbortableAsyncFifoQueue<bool>(serverShutDownSource.Token);
+            // return new Lazy<IExecutableAsyncFifoQueue<bool>>(new BufferBlockAbortableAsyncFifoQueue<bool>(serverShutDownSource.Token));
+        }
+
+        private Lazy<CancellationTokenSource> tokenFactory(string userId)
+        {
+            var myLock = userLocks.GetOrAdd(userId, _ => lockFactory()).Value;
+            try
+            {
+                myLock.Wait();
+                var src = new CancellationTokenSource();
+                Log($"Generating new TokenSource for {userId}: {src.GetHashCode()}", 4);
+                return new Lazy<CancellationTokenSource>(src);
+            }
+            finally
+            {
+                try
+                {
+                    myLock.Release();
+                }
+                catch (Exception) { }
+            }
+        }
+
+        private Lazy<SemaphoreSlim> lockFactory()
+        {
+            return new Lazy<SemaphoreSlim>(new SemaphoreSlim(1));
         }
 
         internal async Task<bool> processUseStateUpdateAsync(User user, UserState state, UserState previousState)
         {
-            var executor = groupStateChangeExecutors.GetOrAdd(user.UserId, getQueue(user.UserId));
+            var executor = groupStateChangeExecutors.GetOrAdd(user.UserId, _ => getLazyQueue(user.UserId)).Value;
+            //var executor = groupStateChangeExecutors.GetOrAdd(user.UserId, new Lazy<IExecutableAsyncFifoQueue<bool>>(getQueue(user.UserId))).Value;
             CancellationTokenSource oldSource = null;
-            using (var cancelSource = userStateChangeAborters.AddOrUpdate(user.UserId, new CancellationTokenSource(), (key, existingValue) =>
+            CancellationTokenSource cancelSource = null;
+            cancelSource = userStateChangeAborters.AddOrUpdate(user.UserId, _ => tokenFactory(user.UserId), (key, existingValue) =>
             {
-                oldSource = existingValue;
-                return new CancellationTokenSource();
-            }))
+                oldSource = existingValue.Value;
+                return tokenFactory(key);
+            }).Value;
+            if (oldSource != null)
             {
-                if (oldSource != null)
+                Log($"Cancelling execution of {nameof(processUseStateUpdateAsync)} for user {user.UserId} because there's a new state: {state}", 4);
+                cancelAndDispose(oldSource, user.UserId);
+                oldSource = null;
+            }
+            Log($"Enqueuing presence state update for user {user.UserId}", 5);
+            try
+            {
+                var cancelToken = cancelSource.Token;
+                var executionTask = executor.EnqueueTask(() => processUserStateUpdateAsync(user, state, previousState,
+                    cancelToken), cancelToken);
+                var result = await executionTask.ConfigureAwait(false);
+                if (userStateChangeAborters.TryRemove(user.UserId, out var aborter))
+                    cancelAndDispose(aborter.Value, user.UserId);
+                return result;
+            }
+            catch (Exception e)
+            {
+                if (e is TaskCanceledException || e is OperationCanceledException)
                 {
-                    Log($"Cancelling execution of {nameof(processUseStateUpdateAsync)} for user {user.UserId} because there's a new state: {state}", 4);
-                    cancelAndDispose(oldSource);
-                    oldSource = null;
+                    Log($"Processing of presence state update for user {user.UserId} was aborted because another state came in", 4);
+                    return true;
                 }
-                Log($"Enqueuing presence state update for user {user.UserId}", 5);
-                try
+                else
                 {
-                    var executionTask = executor.EnqueueTask(() => processUserStateUpdateAsync(user, state, previousState,
-                        cancelSource.Token), cancelSource.Token);
-                    if (cancelSource.Token.IsCancellationRequested)
-                        return false;
-                    var result = await executionTask.ConfigureAwait(false);
-                    userStateChangeAborters.TryRemove(user.UserId, out var aborter);
-                    return result;
-                }
-                catch (Exception e)
-                {
-                    if (e is TaskCanceledException || e is OperationCanceledException)
-                    {
-                        Log($"Processing of presence state update for user {user.UserId} was aborted because another state came in", 4);
-                        return true;
-                    }
-                    else
-                    {
-                        Log($"Something went wrong in {nameof(processUseStateUpdateAsync)}: {e.Message}", 2);
-                        userStateChangeAborters.TryRemove(user.UserId, out var aborter);
-                        return false;
-                    }
+                    Log($"Something went wrong in {nameof(processUseStateUpdateAsync)}: {e.Message}", 2);
+                    if (userStateChangeAborters.TryRemove(user.UserId, out var aborter))
+                        cancelAndDispose(aborter.Value, user.UserId);
+                    return false;
                 }
             }
         }
@@ -139,18 +171,21 @@ namespace AsyncFifoQueueMemoryLeak
 
         #region helper methods
 
-        private void cancelAndDispose(CancellationTokenSource source)
+        private void cancelAndDispose(CancellationTokenSource source, string userId)
         {
             try
             {
                 if (!source.IsCancellationRequested)
+                {
+                    Log($"Cancelling token on source {source.GetHashCode()}, userId: {userId}", 4);
                     source.Cancel();
+                }
             }
             catch (Exception) { }
-            _ = delayedDispose(source);
+            _ = delayedDispose(source, userId);
         }
 
-        private async Task delayedDispose(CancellationTokenSource src)
+        private async Task delayedDispose(CancellationTokenSource src, string userId)
         {
             try
             {
@@ -160,6 +195,7 @@ namespace AsyncFifoQueueMemoryLeak
             {
                 try
                 {
+                    Log($"Disposing source {src.GetHashCode()} for {userId}", 4);
                     src.Dispose();
                 }
                 catch (ObjectDisposedException) { }

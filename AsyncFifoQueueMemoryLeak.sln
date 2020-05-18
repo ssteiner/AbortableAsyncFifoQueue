@@ -5,6 +5,8 @@ VisualStudioVersion = 16.0.30104.148
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "AsyncFifoQueueMemoryLeak", "AsyncFifoQueueMemoryLeak\AsyncFifoQueueMemoryLeak.csproj", "{ABF46EDD-5235-4ABE-BF28-95A998355BD6}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SimplifiedLib", "SimplifiedLib\SimplifiedLib.csproj", "{FA75FB9F-ED81-41DF-ADF5-CAFA71B083B3}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +23,14 @@ Global
 		{ABF46EDD-5235-4ABE-BF28-95A998355BD6}.Release|Any CPU.Build.0 = Release|Any CPU
 		{ABF46EDD-5235-4ABE-BF28-95A998355BD6}.Release|x86.ActiveCfg = Release|Any CPU
 		{ABF46EDD-5235-4ABE-BF28-95A998355BD6}.Release|x86.Build.0 = Release|Any CPU
+		{FA75FB9F-ED81-41DF-ADF5-CAFA71B083B3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FA75FB9F-ED81-41DF-ADF5-CAFA71B083B3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FA75FB9F-ED81-41DF-ADF5-CAFA71B083B3}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{FA75FB9F-ED81-41DF-ADF5-CAFA71B083B3}.Debug|x86.Build.0 = Debug|Any CPU
+		{FA75FB9F-ED81-41DF-ADF5-CAFA71B083B3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FA75FB9F-ED81-41DF-ADF5-CAFA71B083B3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FA75FB9F-ED81-41DF-ADF5-CAFA71B083B3}.Release|x86.ActiveCfg = Release|Any CPU
+		{FA75FB9F-ED81-41DF-ADF5-CAFA71B083B3}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
