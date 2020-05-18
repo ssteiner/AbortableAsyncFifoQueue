@@ -9,7 +9,6 @@ namespace ParallelUtils
         public readonly TaskCompletionSource<T> TaskSource;
         public readonly Func<Task<T>> Action;
         public readonly CancellationToken? CancelToken;
-        public readonly T ActionParameter;
 
         public AsyncWorkItem(TaskCompletionSource<T> taskSource, Func<Task<T>> action, CancellationToken? cancelToken)
         {
@@ -17,18 +16,10 @@ namespace ParallelUtils
             Action = action;
             CancelToken = cancelToken;
         }
-
-        public AsyncWorkItem(TaskCompletionSource<T> taskSource, Func<Task<T>> action, CancellationToken? cancelToken, T actionParameter)
-            : this(taskSource, action, cancelToken)
-        {
-            ActionParameter = actionParameter;
-        }
     }
 
-    public interface IExecutableAsyncFifoQueue<T> : IDisposable
+    public interface IExecutableAsyncFifoQueue<T>
     {
-        Task<T> EnqueueTask(Func<Task<T>> action);
-
         Task<T> EnqueueTask(Func<Task<T>> action, CancellationToken? cancelToken);
     }
 }

@@ -1,7 +1,6 @@
 ﻿using AsyncFifoQueueMemoryLeak.Models;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -15,7 +14,6 @@ namespace AsyncFifoQueueMemoryLeak
     {
         //variables defining the test
         readonly int nbOfusers = 100;
-        readonly int nbOfTeams = 0;
         readonly int minimumDelayBetweenTest = 1; // seconds
         readonly int maximumDelayBetweenTests = 6; // seconds
         readonly int operationDuration = 3; // number of seconds an operation takes in the tester
@@ -24,7 +22,7 @@ namespace AsyncFifoQueueMemoryLeak
         private List<User> users;
         private List<Team> teams;
         //private readonly LeakyTestperformer tester;
-        private readonly LeakyConsumer tester2;
+        private readonly SimpleLeakyConsumer tester2;
 
         protected CancellationTokenSource serverShutDownSource, testAbortSource;
         private CancellationToken internalToken = CancellationToken.None;
@@ -34,19 +32,15 @@ namespace AsyncFifoQueueMemoryLeak
             rand = new Random();
             testAbortSource = new CancellationTokenSource();
             serverShutDownSource = new CancellationTokenSource();
-            generateTestObjects(nbOfusers, nbOfTeams, false);
-            //tester = new LeakyTestperformer(users, teams, serverShutDownSource, operationDuration)
-            //{
-            //    DisableTeams = true
-            //};
-            tester2 = new LeakyConsumer(users, serverShutDownSource, operationDuration);
+            generateTestObjects(nbOfusers);
+            tester2 = new SimpleLeakyConsumer(serverShutDownSource, operationDuration);
         }
 
         internal void StartTests()
         {
             if (internalToken == CancellationToken.None || internalToken.IsCancellationRequested)
             {
-                tester2.Log($"Starting test for {users.Count} users", 4);
+                //tester2.Log($"Starting test for {users.Count} users", 4);
                 internalToken = testAbortSource.Token;
                 //token.Register(systemShutdown);
                 foreach (var user in users)
@@ -56,7 +50,7 @@ namespace AsyncFifoQueueMemoryLeak
 
         internal void StopTests()
         {
-            tester2.Log($"Stopping test", 4);
+            //tester2.Log($"Stopping test", 4);
             testAbortSource.Cancel();
             try
             {
@@ -69,7 +63,7 @@ namespace AsyncFifoQueueMemoryLeak
         internal void Shutdown()
         {
             serverShutDownSource.Cancel();
-            tester2.Stop();
+            //tester2.Stop();
         }
 
         private async Task setNewUserPresence(CancellationToken token, User user)
@@ -83,7 +77,7 @@ namespace AsyncFifoQueueMemoryLeak
                 }
                 catch (TaskCanceledException e)
                 {
-                    tester2.Log($"testing tast for user {user.UserId} was aborted: {e.Message}", 4);
+                    //tester2.Log($"testing tast for user {user.UserId} was aborted: {e.Message}", 4);
                     break;
                 }
                 //now randomly generate a new state and submit it to the tester class
@@ -119,7 +113,7 @@ namespace AsyncFifoQueueMemoryLeak
         /// <param name="nbUsers"></param>
         /// <param name="nbTeams"></param>
         /// <param name="addAllUsersToTeams"></param>
-        private void generateTestObjects(int nbUsers, int nbTeams, bool addAllUsersToTeams = false)
+        private void generateTestObjects(int nbUsers)
         {
             users = new List<User>();
             for (int i = 0; i < nbUsers; i++)
@@ -132,38 +126,6 @@ namespace AsyncFifoQueueMemoryLeak
                 users.Add(usr);
             }
             teams = new List<Team>();
-            for (int i = 0; i < nbTeams; i++)
-            {
-                var team = new Team 
-                { 
-                    Name = $"Team {i}", 
-                    UserId = $"Team_{1}", 
-                    Members = new List<string>() 
-                };
-                if (addAllUsersToTeams)
-                    team.Members = users.Select(x => x.UserId).ToList();
-                else // do it randomly
-                {
-                    int nbUsersInTeam = rand.Next(0, users.Count);
-                    if (nbUsersInTeam > 0)
-                    {
-                        int nbUsersAdded = 0;
-                        do
-                        {
-                            var userIndex = rand.Next(0, nbUsersInTeam);
-                            var usr = users[userIndex];
-                            if (!team.Members.Contains(usr.UserId))
-                            {
-                                team.Members.Add(usr.UserId);
-                                nbUsersAdded++;
-                            }
-                        }
-                        while (nbUsersAdded < nbUsersInTeam);
-                    }
-                }
-                teams.Add(team);
-            }
-
         }
 
     }

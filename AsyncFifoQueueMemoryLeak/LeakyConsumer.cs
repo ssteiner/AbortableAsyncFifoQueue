@@ -60,18 +60,19 @@ namespace AsyncFifoQueueMemoryLeak
             }
         }
 
-        private IExecutableAsyncFifoQueue<bool> getQueue()
+        private IExecutableAsyncFifoQueue<bool> getQueue(string userId)
         {
-            return new ChannelAbortableBoundedFifoQueue<bool>(serverShutDownSource.Token);
+            Log($"Generating a new Fifo Queue for {userId}", 4);
+            //return new ChannelAbortableBoundedFifoQueue<bool>(serverShutDownSource.Token);
             // using AsyncCollection
-            //return new AsyncCollectionAbortableFifoQueue<bool>(serverShutDownSource.Token);
+            return new AsyncCollectionAbortableFifoQueue<bool>(serverShutDownSource.Token);
             // using BufferBlock
             // return new BufferBlockAbortableAsyncFifoQueue<bool>(serverShutDownSource.Token);
         }
 
         internal async Task<bool> processUseStateUpdateAsync(User user, UserState state, UserState previousState)
         {
-            var executor = groupStateChangeExecutors.GetOrAdd(user.UserId, getQueue());
+            var executor = groupStateChangeExecutors.GetOrAdd(user.UserId, getQueue(user.UserId));
             CancellationTokenSource oldSource = null;
             using (var cancelSource = userStateChangeAborters.AddOrUpdate(user.UserId, new CancellationTokenSource(), (key, existingValue) =>
             {
@@ -89,7 +90,7 @@ namespace AsyncFifoQueueMemoryLeak
                 try
                 {
                     var executionTask = executor.EnqueueTask(() => processUserStateUpdateAsync(user, state, previousState,
-                        cancelSource.Token));
+                        cancelSource.Token), cancelSource.Token);
                     if (cancelSource.Token.IsCancellationRequested)
                         return false;
                     var result = await executionTask.ConfigureAwait(false);
