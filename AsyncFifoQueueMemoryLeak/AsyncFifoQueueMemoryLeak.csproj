@@ -3,13 +3,11 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>netcoreapp3.1</TargetFramework>
-    <Version>1.0.1</Version>
+    <Version>1.0.2</Version>
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="LeakyTestperformer.cs" />
     <Compile Remove="ParallelUtils\ExecutableAsyncFifoQueue.cs" />
-    <Compile Remove="ParallelUtils\ExecutableAsyncFifoQueue2.cs" />
   </ItemGroup>
 
   <ItemGroup>

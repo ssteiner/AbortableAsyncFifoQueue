@@ -13,6 +13,7 @@ namespace ParallelUtils
         public AsyncCollectionAbortableFifoQueue(CancellationToken cancelToken)
         {
             stopProcessingToken = cancelToken;
+            stopProcessingToken.Register(stopProcessing);
             _ = processQueuedItems();
         }
 
@@ -24,7 +25,12 @@ namespace ParallelUtils
             return tcs.Task;
         }
 
-        protected virtual async Task processQueuedItems()
+        public void Stop()
+        {
+            stopProcessing();
+        }
+
+        private async Task processQueuedItems()
         {
             while (!stopProcessingToken.IsCancellationRequested)
             {
@@ -44,12 +50,19 @@ namespace ParallelUtils
                         {
                             if (ex is OperationCanceledException && ((OperationCanceledException)ex).CancellationToken == item.CancelToken)
                                 item.TaskSource.SetCanceled();
-                            item.TaskSource.SetException(ex);
+                            else
+                                item.TaskSource.SetException(ex);
                         }
                     }
                 }
                 catch (Exception) { }
             }
         }
+
+        private void stopProcessing()
+        {
+            taskQueue.CompleteAdding();
+        }
+
     }
 }

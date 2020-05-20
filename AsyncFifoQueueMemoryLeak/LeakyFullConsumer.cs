@@ -13,15 +13,16 @@ namespace AsyncFifoQueueMemoryLeak
     /// this class takes submitted UserStatus, and performs some operations based on it
     /// a status change of a user may trigger 0 up to 1 + (number of Teams the user is a member of) operations which are executed in parallel
     /// </summary>
-    internal class LeakyTestperformer
+    internal class LeakyFullConsumer
     {
 
         private readonly ConcurrentDictionary<string, UserState> userPresenceStates;
         private readonly ConcurrentDictionary<string, UserState> groupPresenceStates;
-        private readonly ConcurrentDictionary<string, SemaphoreSlim> userLocks;
-        private ConcurrentDictionary<string, IExecutableAsyncFifoQueue<bool>> groupStateChangeExecutors;
-        private readonly ConcurrentDictionary<string, CancellationTokenSource> userStateChangeAborters;
-        protected ConcurrentDictionary<string, CancellationTokenSource> groupStateChangeAborters;
+        private readonly ConcurrentDictionary<string, Lazy<SemaphoreSlim>> userLocks;
+        private ConcurrentDictionary<string, Lazy<IExecutableAsyncFifoQueue<bool>>> groupStateChangeExecutors;
+        private readonly ConcurrentDictionary<string, Lazy<CancellationTokenSource>> userStateChangeAborters;
+        protected ConcurrentDictionary<string, Lazy<CancellationTokenSource>> groupStateChangeAborters;
+        private readonly ConcurrentDictionary<string, Lazy<SemaphoreSlim>> groupLocks;
 
         protected CancellationTokenSource serverShutDownSource;
 
@@ -33,15 +34,18 @@ namespace AsyncFifoQueueMemoryLeak
 
         internal bool DisableTeams { get; set; }
 
-        internal LeakyTestperformer(List<User> users, List<Team> teams, CancellationTokenSource serverShutDownSource, int operationDuration)
+        internal LeakyFullConsumer(List<User> users, List<Team> teams, CancellationTokenSource serverShutDownSource, int operationDuration)
         {
             userPresenceStates = new ConcurrentDictionary<string, UserState>();
             groupPresenceStates = new ConcurrentDictionary<string, UserState>();
-            userStateChangeAborters = new ConcurrentDictionary<string, CancellationTokenSource>();
-            groupStateChangeAborters = new ConcurrentDictionary<string, CancellationTokenSource>();
-            groupStateChangeExecutors = new ConcurrentDictionary<string, IExecutableAsyncFifoQueue<bool>>();
-            userLocks = new ConcurrentDictionary<string, SemaphoreSlim>();
-            users.ForEach(u => userLocks.TryAdd(u.UserId, new SemaphoreSlim(1)));
+            userStateChangeAborters = new ConcurrentDictionary<string, Lazy<CancellationTokenSource>>();
+            groupStateChangeAborters = new ConcurrentDictionary<string, Lazy<CancellationTokenSource>>();
+            groupStateChangeExecutors = new ConcurrentDictionary<string, Lazy<IExecutableAsyncFifoQueue<bool>>>();
+            userLocks = new ConcurrentDictionary<string, Lazy<SemaphoreSlim>>();
+            users.ForEach(u => userLocks.TryAdd(u.UserId, new Lazy<SemaphoreSlim>(new SemaphoreSlim(1))));
+            groupLocks = new ConcurrentDictionary<string, Lazy<SemaphoreSlim>>();
+            if (teams != null)
+                teams.ForEach(t => groupLocks.TryAdd(t.UserId, new Lazy<SemaphoreSlim>(new SemaphoreSlim(1))));
 
             this.serverShutDownSource = serverShutDownSource;
             this.teams = teams;
@@ -54,7 +58,7 @@ namespace AsyncFifoQueueMemoryLeak
             serverShutDownSource.Cancel();
         }
 
-        internal async Task ProcessPresenceStateChange(UserState state, string userId, bool forceSend = false)
+        internal async Task ProcessStateChange(UserState state, string userId, bool forceSend = false)
         {
             UserState previousState = UserState.Offline;
             bool previousStateAvailable = false;
@@ -98,16 +102,16 @@ namespace AsyncFifoQueueMemoryLeak
                 IEnumerable<Team> affectedTeams = teams.Where(t => t.Members != null && t.Members.Any(x => x == user.UserId));
                 if (affectedTeams.Count() > 0)
                 {
-                    foreach (var team in affectedTeams)
-                    {
-                        var task = processTeamPresenceUpdate(team, $"{$"user {entity} status changed to "}{state}");
-                        processTasks.Add(task);
-                    }
-                    //Task updateTask = affectedTeams.ForEachAsync(maximumNumberOfParallelOperations, (team) =>
+                    //foreach (var team in affectedTeams)
                     //{
-                    //    return processTeamPresenceUpdate(team, $"{$"user {entity} status changed to "}{state}");
-                    //});
-                    //processTasks.Add(updateTask);
+                    //    var task = processTeamPresenceUpdate(team, $"{$"user {entity} status changed to "}{state}");
+                    //    processTasks.Add(task);
+                    //}
+                    Task updateTask = affectedTeams.ForEachAsync(maximumNumberOfParallelOperations, (team) =>
+                    {
+                        return processTeamPresenceUpdate(team, $"{$"user {entity} status changed to "}{state}");
+                    });
+                    processTasks.Add(updateTask);
                 }
             }
             try
@@ -123,79 +127,104 @@ namespace AsyncFifoQueueMemoryLeak
         internal async Task<bool> processTeamPresenceUpdate(Team team, string reason, bool force = false)
         {
             var executor = getAsyncFifoExecutor(team.UserId);
-            CancellationTokenSource oldSource = null;
-            using (var cancelSource = groupStateChangeAborters.AddOrUpdate(team.UserId, new CancellationTokenSource(), (key, existingValue) =>
+            CancellationTokenSource oldSource = null, cancelSource = null;
+            cancelSource = groupStateChangeAborters.AddOrUpdate(team.UserId, _ => tokenFactory(team.UserId, false), (key, existingValue) =>
             {
-                oldSource = existingValue;
-                return new CancellationTokenSource();
-            }))
+                oldSource = existingValue.Value;
+                return tokenFactory(key, false);
+            }).Value;
+            if (oldSource != null)
             {
-                if (oldSource != null)
-                {
-                    Log($"Cancelling execution of {nameof(processTeamPresenceUpdate)} for team {team.Name} because there's a new call to {nameof(processTeamPresenceUpdate)}", 4);
-                    cancelAndDispose(oldSource);
-                    oldSource = null;
-                }
-                Log($"Enqueuing presence state update for team {team.Name}, reason: {reason}", 5);
-                try
-                {
-                    var executionTask = executor.EnqueueTask(() => UpdateTeamPresence(team, reason, cancelSource.Token, force), cancelSource.Token);
-                    var result = await executionTask.ConfigureAwait(false);
-                    groupStateChangeAborters.TryRemove(team.UserId, out var aborter);
-                    return result;
-                }
-                catch (TaskCanceledException)
+                Log($"Cancelling execution of {nameof(processTeamPresenceUpdate)} for team {team.Name} because there's a new call to {nameof(processTeamPresenceUpdate)}", 4);
+                if (!oldSource.IsCancellationRequested)
+                    oldSource.Cancel();
+                //cancelAndDispose(oldSource, team.UserId);
+            }
+            Log($"Enqueuing presence state update for team {team.Name}, reason: {reason} for source {cancelSource.GetHashCode()}", 5);
+            try
+            {
+                if (cancelSource.IsCancellationRequested)
+                    return false;
+                var token = cancelSource.Token;
+                var executionTask = executor.EnqueueTask(() => UpdateTeamPresence(team, reason, token, force), token);
+                var result = await executionTask.ConfigureAwait(false);
+                //if (groupStateChangeAborters.TryRemove(team.UserId, out var aborter))
+                //    dispose(aborter.Value, team.UserId);
+                return result;
+            }
+            catch (Exception e)
+            {
+                if (e is TaskCanceledException || e is OperationCanceledException)
                 {
                     Log($"Processing of presence state update for team {team.Name} was aborted because another state came in", 4);
-                    return false;
+                    return true;
                 }
-                catch (Exception e)
+                else
                 {
                     Log($"Something went wrong in {nameof(processTeamPresenceUpdate)}: {e.Message}", 2);
-                    userStateChangeAborters.TryRemove(team.UserId, out var aborter);
+                    //if (userStateChangeAborters.TryRemove(team.UserId, out var aborter))
+                    //    cancelAndDispose(oldSource, team.UserId, true);
                     return false;
                 }
+            }
+            finally
+            {
+                if (oldSource != null)
+                    dispose(oldSource, team.UserId);
+                cancelAndDispose(cancelSource, team.UserId, true);
             }
         }
 
         internal async Task<bool> processUserPresenceUpdateAsync(User user, UserState state, UserState previousState, bool isInitialState = false)
         {
             var executor = getAsyncFifoExecutor(user.UserId);
-            CancellationTokenSource oldSource = null;
-            using (var cancelSource = userStateChangeAborters.AddOrUpdate(user.UserId, new CancellationTokenSource(), (key, existingValue) =>
+            CancellationTokenSource oldSource = null, cancelSource = null;
+            cancelSource = userStateChangeAborters.AddOrUpdate(user.UserId, _ => tokenFactory(user.UserId, true), (key, existingValue) =>
             {
-                oldSource = existingValue;
-                return new CancellationTokenSource();
-            }))
+                oldSource = existingValue.Value;
+                return tokenFactory(key, true);
+            }).Value;
             {
                 if (oldSource != null)
                 {
                     Log($"Cancelling execution of {nameof(processUserPresenceUpdateAsync)} for user {user.UserId} because there's a new state: {state}", 4);
-                    cancelAndDispose(oldSource);
-                    oldSource = null;
+                    if (!oldSource.IsCancellationRequested)
+                        oldSource.Cancel();
+                    //cancelAndDispose(oldSource, user.UserId);
                 }
-                Log($"Enqueuing presence state update for user {user.UserId}", 5);
+                Log($"Enqueuing presence state update for user {user.UserId} for source {cancelSource.GetHashCode()}", 5);
                 try
                 {
+                    if (cancelSource.IsCancellationRequested)
+                        return true;
+                    var cancelToken = cancelSource.Token;
                     var executionTask = executor.EnqueueTask(() => processUserPresenceUpdateAsync(user, state, previousState,
-                        cancelSource.Token, isInitialState), cancelSource.Token);
-                    if (cancelSource.Token.IsCancellationRequested)
-                        return false;
+                        cancelToken, isInitialState), cancelToken);
                     var result = await executionTask.ConfigureAwait(false);
-                    userStateChangeAborters.TryRemove(user.UserId, out var aborter);
+                    //if (userStateChangeAborters.TryRemove(user.UserId, out var aborter))
+                    //    dispose(aborter.Value, user.UserId);
                     return result;
-                }
-                catch (TaskCanceledException)
-                {
-                    Log($"Processing of presence state update for user {user.UserId} was aborted because another state came in", 4);
-                    return true;
-                    //all good here.. we aborted execution on purpose
                 }
                 catch (Exception e)
                 {
-                    Log($"Something went wrong in {nameof(processUserPresenceUpdateAsync)}: {e.Message}", 2);
-                    userStateChangeAborters.TryRemove(user.UserId, out var aborter);
-                    return false;
+                    if (e is TaskCanceledException || e is OperationCanceledException)
+                    {
+                        Log($"Processing of presence state update for user {user.UserId} was aborted because another state came in", 4);
+                        return true;
+                    }
+                    else
+                    {
+                        Log($"Something went wrong in {nameof(processUserPresenceUpdateAsync)}: {e.Message}", 2);
+                        //if (userStateChangeAborters.TryRemove(user.UserId, out var aborter))
+                        //    cancelAndDispose(aborter.Value, user.UserId, true);
+                        return false;
+                    }
+                }
+                finally
+                {
+                    if (oldSource != null)
+                        dispose(oldSource, user.UserId);
+                    cancelAndDispose(cancelSource, user.UserId, true);
                 }
             }
         }
@@ -293,28 +322,63 @@ namespace AsyncFifoQueueMemoryLeak
 
         private IExecutableAsyncFifoQueue<bool> getAsyncFifoExecutor(string presenceIdentifier)
         {
-            return groupStateChangeExecutors.GetOrAdd(presenceIdentifier, getNewExecutor());
+            return groupStateChangeExecutors.GetOrAdd(presenceIdentifier, _ => getNewExecutor()).Value;
         }
 
-        private IExecutableAsyncFifoQueue<bool> getNewExecutor()
+        private Lazy<IExecutableAsyncFifoQueue<bool>> getNewExecutor()
         {
-            return new AsyncCollectionAbortableFifoQueue<bool>(serverShutDownSource.Token);
+            return new Lazy<IExecutableAsyncFifoQueue<bool>>(new AsyncCollectionAbortableFifoQueue<bool>(serverShutDownSource.Token));
             //return new ExecutableAsyncFifoQueue3<bool>(serverShutDownSource.Token);
             //return new ModernExecutableAsyncFifoQueue<bool>(serverShutDownSource.Token);
         }
 
-        private void cancelAndDispose(CancellationTokenSource source)
+        private Lazy<CancellationTokenSource> tokenFactory(string userId, bool isUser)
+        {
+            SemaphoreSlim myLock = null;
+            if (isUser)
+                myLock = userLocks.GetOrAdd(userId, _ => lockFactory()).Value;
+            else
+                myLock = groupLocks.GetOrAdd(userId, _ => lockFactory()).Value;
+            try
+            {
+                myLock.Wait();
+                var src = new CancellationTokenSource();
+                Log($"Generating new TokenSource for {userId}: {src.GetHashCode()}", 4);
+                return new Lazy<CancellationTokenSource>(src);
+            }
+            finally
+            {
+                try
+                {
+                    myLock.Release();
+                }
+                catch (Exception) { }
+            }
+        }
+
+        private Lazy<SemaphoreSlim> lockFactory()
+        {
+            return new Lazy<SemaphoreSlim>(new SemaphoreSlim(1));
+        }
+
+        private void cancelAndDispose(CancellationTokenSource source, string identifier, bool immediateDispose = false)
         {
             try
             {
                 if (!source.IsCancellationRequested)
+                {
+                    Log($"Cancelling token on source {source.GetHashCode()}, identifier: {identifier}", 6);
                     source.Cancel();
+                }
             }
             catch (Exception) { }
-            _ = delayedDispose(source);
+            if (immediateDispose)
+                dispose(source, identifier);
+            else
+                _ = delayedDispose(source, identifier);
         }
 
-        private async Task delayedDispose(CancellationTokenSource src)
+        private async Task delayedDispose(CancellationTokenSource src, string identifier)
         {
             try
             {
@@ -322,12 +386,18 @@ namespace AsyncFifoQueueMemoryLeak
             }
             finally
             {
-                try
-                {
-                    src.Dispose();
-                }
-                catch (ObjectDisposedException) { }
+                dispose(src, identifier);
             }
+        }
+
+        private void dispose(CancellationTokenSource src, string identifier)
+        {
+            try
+            {
+                Log($"Disposing source {src.GetHashCode()} for {identifier}", 6);
+                src.Dispose();
+            }
+            catch (ObjectDisposedException) { }
         }
 
 

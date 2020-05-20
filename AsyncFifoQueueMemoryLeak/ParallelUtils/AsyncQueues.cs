@@ -21,5 +21,7 @@ namespace ParallelUtils
     public interface IExecutableAsyncFifoQueue<T>
     {
         Task<T> EnqueueTask(Func<Task<T>> action, CancellationToken? cancelToken);
+
+        void Stop();
     }
 }

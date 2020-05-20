@@ -14,7 +14,7 @@ namespace AsyncFifoQueueMemoryLeak
     internal class Producer
     {
         //variables defining the test
-        readonly int nbOfusers = 10, nbOfTeams = 0;
+        readonly int nbOfusers = 10, nbOfTeams = 4;
         readonly int minimumDelayBetweenTest = 1; // seconds
         readonly int maximumDelayBetweenTests = 6; // seconds
         readonly int operationDuration = 3; // number of seconds an operation takes in the tester
@@ -22,9 +22,9 @@ namespace AsyncFifoQueueMemoryLeak
         private readonly Random rand;
         private List<User> users;
         private List<Team> teams;
-        //private readonly LeakyTestperformer tester;
+        private readonly LeakyFullConsumer consumer;
         //private readonly SimpleLeakyConsumer tester2;
-        private readonly LeakyConsumer tester2;
+        //private readonly LeakyConsumer consumer2;
 
         protected CancellationTokenSource serverShutDownSource, testAbortSource;
         private CancellationToken internalToken = CancellationToken.None;
@@ -36,7 +36,8 @@ namespace AsyncFifoQueueMemoryLeak
             serverShutDownSource = new CancellationTokenSource();
             generateTestObjects(nbOfusers, nbOfTeams, false);
             //tester2 = new SimpleLeakyConsumer(serverShutDownSource, operationDuration);
-            tester2 = new LeakyConsumer(users, serverShutDownSource, operationDuration);
+            //consumer2 = new LeakyConsumer(users, serverShutDownSource, operationDuration);
+            consumer = new LeakyFullConsumer(users, teams, serverShutDownSource, operationDuration);
         }
 
         internal void StartTests()
@@ -80,7 +81,7 @@ namespace AsyncFifoQueueMemoryLeak
                 }
                 catch (TaskCanceledException e)
                 {
-                    tester2.Log($"testing tast for user {user.UserId} was aborted: {e.Message}", 4);
+                    consumer.Log($"testing tast for user {user.UserId} was aborted: {e.Message}", 4);
                     break;
                 }
                 //now randomly generate a new state and submit it to the tester class
@@ -106,7 +107,7 @@ namespace AsyncFifoQueueMemoryLeak
 
         private async Task sendUserStatus(User user, UserState status)
         {
-            await tester2.ProcessStateChange(status, user).ConfigureAwait(false);
+            await consumer.ProcessStateChange(status, user.UserId).ConfigureAwait(false);
             //await tester.ProcessPresenceStateChange(status, user.UserId).ConfigureAwait(false);
         }
 
@@ -141,7 +142,8 @@ namespace AsyncFifoQueueMemoryLeak
                     team.Members = users.Select(x => x.UserId).ToList();
                 else // do it randomly
                 {
-                    int nbUsersInTeam = rand.Next(0, users.Count);
+                    int upperLimit = Math.Min(users.Count, 10);
+                    int nbUsersInTeam = rand.Next(0, upperLimit);
                     if (nbUsersInTeam > 0)
                     {
                         int nbUsersAdded = 0;

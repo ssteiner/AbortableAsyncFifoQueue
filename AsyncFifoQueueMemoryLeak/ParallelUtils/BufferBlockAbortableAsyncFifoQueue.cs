@@ -9,29 +9,35 @@ namespace ParallelUtils
     public class BufferBlockAbortableAsyncFifoQueue<T> : IExecutableAsyncFifoQueue<T>
     {
 
-        private readonly BufferBlock<AsyncWorkItem<T>> buffer = new BufferBlock<AsyncWorkItem<T>>();
+        private readonly BufferBlock<AsyncWorkItem<T>> taskQueue = new BufferBlock<AsyncWorkItem<T>>();
         private readonly CancellationToken stopProcessingToken;
 
         public BufferBlockAbortableAsyncFifoQueue(CancellationToken cancelToken)
         {
             stopProcessingToken = cancelToken;
+            stopProcessingToken.Register(stopProcessing);
             _ = processQueuedItems();
         }
 
-        public virtual Task<T> EnqueueTask(Func<Task<T>> action, CancellationToken? cancelToken)
+        public Task<T> EnqueueTask(Func<Task<T>> action, CancellationToken? cancelToken)
         {
             var tcs = new TaskCompletionSource<T>();
-            buffer.Post(new AsyncWorkItem<T>(tcs, action, cancelToken));
+            taskQueue.Post(new AsyncWorkItem<T>(tcs, action, cancelToken));
             return tcs.Task;
         }
 
-        protected virtual async Task processQueuedItems()
+        public void Stop()
+        {
+            stopProcessing();
+        }
+
+        private async Task processQueuedItems()
         {
             while (!stopProcessingToken.IsCancellationRequested)
             {
                 try
                 {
-                    var item = await buffer.ReceiveAsync(stopProcessingToken).ConfigureAwait(false);
+                    var item = await taskQueue.ReceiveAsync(stopProcessingToken).ConfigureAwait(false);
                     if (item.CancelToken.HasValue && item.CancelToken.Value.IsCancellationRequested)
                         item.TaskSource.SetCanceled();
                     else
@@ -45,12 +51,18 @@ namespace ParallelUtils
                         {
                             if (ex is OperationCanceledException && ((OperationCanceledException)ex).CancellationToken == item.CancelToken)
                                 item.TaskSource.SetCanceled();
-                            item.TaskSource.SetException(ex);
+                            else
+                                item.TaskSource.SetException(ex);
                         }
                     }
                 }
                 catch (Exception) { }
             }
+        }
+
+        private void stopProcessing()
+        {
+            taskQueue.Complete();
         }
 
     }
