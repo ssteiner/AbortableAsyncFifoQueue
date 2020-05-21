@@ -136,15 +136,14 @@ namespace AsyncFifoQueueMemoryLeak
             if (oldSource != null)
             {
                 Log($"Cancelling execution of {nameof(processTeamPresenceUpdate)} for team {team.Name} because there's a new call to {nameof(processTeamPresenceUpdate)}", 4);
-                if (!oldSource.IsCancellationRequested)
-                    oldSource.Cancel();
+                cancel(oldSource, team.UserId);
                 //cancelAndDispose(oldSource, team.UserId);
             }
             Log($"Enqueuing presence state update for team {team.Name}, reason: {reason} for source {cancelSource.GetHashCode()}", 5);
             try
             {
                 if (cancelSource.IsCancellationRequested)
-                    return false;
+                    return true;
                 var token = cancelSource.Token;
                 var executionTask = executor.EnqueueTask(() => UpdateTeamPresence(team, reason, token, force), token);
                 var result = await executionTask.ConfigureAwait(false);
@@ -188,8 +187,7 @@ namespace AsyncFifoQueueMemoryLeak
                 if (oldSource != null)
                 {
                     Log($"Cancelling execution of {nameof(processUserPresenceUpdateAsync)} for user {user.UserId} because there's a new state: {state}", 4);
-                    if (!oldSource.IsCancellationRequested)
-                        oldSource.Cancel();
+                    cancel(oldSource, user.UserId);
                     //cancelAndDispose(oldSource, user.UserId);
                 }
                 Log($"Enqueuing presence state update for user {user.UserId} for source {cancelSource.GetHashCode()}", 5);
@@ -361,7 +359,7 @@ namespace AsyncFifoQueueMemoryLeak
             return new Lazy<SemaphoreSlim>(new SemaphoreSlim(1));
         }
 
-        private void cancelAndDispose(CancellationTokenSource source, string identifier, bool immediateDispose = false)
+        private void cancel(CancellationTokenSource source, string identifier)
         {
             try
             {
@@ -372,6 +370,11 @@ namespace AsyncFifoQueueMemoryLeak
                 }
             }
             catch (Exception) { }
+        }
+
+        private void cancelAndDispose(CancellationTokenSource source, string identifier, bool immediateDispose = false)
+        {
+            cancel(source, identifier);
             if (immediateDispose)
                 dispose(source, identifier);
             else
